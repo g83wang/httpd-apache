@@ -487,8 +487,7 @@ static void process_socket(apr_thread_t *thd, apr_pool_t *p, apr_socket_t *sock,
                                             conn_id, sbh, bucket_alloc);
     if (current_conn) {
         current_conn->current_thread = thd;
-        ap_process_connection(current_conn, sock);
-   //   ap_process_http_sync_connection(current_conn);        
+        ap_process_connection(current_conn, sock);  
         ap_lingering_close(current_conn);
     }
 }
@@ -846,7 +845,6 @@ worker_pop:
         apr_thread_mutex_lock(reuse_mutex);
 	num_reusables++;
 	apr_thread_mutex_unlock(reuse_mutex);
-//	break;
     }
 
     ap_update_child_status_from_indexes(process_slot, thread_slot,
