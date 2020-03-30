@@ -141,8 +141,11 @@ static apr_pollset_t *worker_pollset;
 struct apr_thread_cond_t * empty_cond;
 struct apr_thread_cond_t * full_cond;
 struct apr_thread_mutex_t * worker_mutex;
+struct apr_thread_mutex_t * reuse_mutex;
 
-int num_idler = 0;
+int num_idlers = 0;
+int num_reusables = 0;
+int total_workers =0;
 
 
 /* data retained by worker across load/unload of the module
@@ -574,8 +577,10 @@ static void * APR_THREAD_FUNC listener_thread(apr_thread_t *thd, void * dummy)
         }
         if (listener_may_exit) break;
 	
-        apr_thread_mutex_lock(worker_mutex);
-        while(num_idler == 0) apr_thread_cond_wait(full_cond, worker_mutex);
+	apr_thread_mutex_lock(worker_mutex);
+	apr_thread_mutex_lock(reuse_mutex);
+
+        while(num_idlers == 0 && num_reusables <= 0 && total_workers < threads_per_child) apr_thread_cond_wait(full_cond, worker_mutex);
 
         if (!have_idle_worker) {
             rv = ap_queue_info_wait_for_idler(worker_queue_info, NULL);
@@ -591,6 +596,7 @@ static void * APR_THREAD_FUNC listener_thread(apr_thread_t *thd, void * dummy)
             }
             have_idle_worker = 1;
         }
+
 
         /* We've already decremented the idle worker count inside
          * ap_queue_info_wait_for_idler. */
@@ -721,10 +727,16 @@ static void * APR_THREAD_FUNC listener_thread(apr_thread_t *thd, void * dummy)
             }
             break;
         }
-        num_idler--;
-        apr_thread_cond_signal(empty_cond);
-        apr_thread_mutex_unlock(worker_mutex);
-        
+
+	if(num_reusables <= 0) { 
+                 num_idlers--;
+                 apr_thread_cond_signal(empty_cond);
+	}else{
+		num_reusables--;
+	}
+	apr_thread_mutex_unlock(reuse_mutex);
+        apr_thread_mutex_unlock(worker_mutex);      
+	
     }
 
     ap_close_listeners_ex(my_bucket->listeners);
@@ -823,6 +835,7 @@ worker_pop:
             continue;
         }
         is_idle = 0;
+	
         worker_sockets[thread_slot] = csd;
         bucket_alloc = apr_bucket_alloc_create(ptrans);
         process_socket(thd, ptrans, csd, process_slot, thread_slot, bucket_alloc);
@@ -830,7 +843,10 @@ worker_pop:
         requests_this_child--;
         apr_pool_clear(ptrans);
         last_ptrans = ptrans;
-	break;
+        apr_thread_mutex_lock(reuse_mutex);
+	num_reusables++;
+	apr_thread_mutex_unlock(reuse_mutex);
+//	break;
     }
 
     ap_update_child_status_from_indexes(process_slot, thread_slot,
@@ -966,7 +982,7 @@ static void * APR_THREAD_FUNC start_threads(apr_thread_t *thd, void *dummy)
         /* threads_per_child does not include the listener thread */
         for (i = 0; i < threads_per_child; i++) {
 	    apr_thread_mutex_lock(worker_mutex);
-	    while(num_idler == 1) apr_thread_cond_wait(empty_cond, worker_mutex); 
+	    while(num_idlers == 1) apr_thread_cond_wait(empty_cond, worker_mutex); 
 	    int status = ap_scoreboard_image->servers[my_child_num][i].status;
 
             if (status != SERVER_GRACEFUL && status != SERVER_DEAD) {
@@ -993,12 +1009,13 @@ static void * APR_THREAD_FUNC start_threads(apr_thread_t *thd, void *dummy)
                 clean_child_exit(APEXIT_CHILDSICK);
             }
 
-	    num_idler++;
+	    num_idlers++;
+	    total_workers++;
+	    threads_created++;
 	    apr_thread_cond_signal(full_cond);
 	    apr_thread_mutex_unlock(worker_mutex);
 	    
         }
-	continue;
 	
         if (start_thread_may_exit || threads_created == threads_per_child) {
             break;
@@ -1213,6 +1230,7 @@ static void child_main(int child_num_arg, int child_bucket)
     ts->threadattr = thread_attr;
     
     apr_thread_mutex_create(&worker_mutex, APR_THREAD_MUTEX_DEFAULT, pruntime);
+    apr_thread_mutex_create(&reuse_mutex, APR_THREAD_MUTEX_DEFAULT, pruntime);
     apr_thread_cond_create(&empty_cond, pruntime);
     apr_thread_cond_create(&full_cond, pruntime);
     

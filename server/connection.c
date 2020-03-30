@@ -116,7 +116,7 @@ AP_DECLARE(int) ap_prep_lingering_close(conn_rec *c)
  * TCP RST packets to be sent which can tear down a connection before
  * all the response data has been sent to the client.
  */
-#define SECONDS_TO_LINGER  40
+#define SECONDS_TO_LINGER  5
 
 AP_DECLARE(int) ap_start_lingering_close(conn_rec *c)
 {

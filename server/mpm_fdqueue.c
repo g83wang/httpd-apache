@@ -133,7 +133,7 @@ apr_status_t ap_queue_info_set_idle(fd_queue_info_t *queue_info,
 apr_status_t ap_queue_info_try_get_idler(fd_queue_info_t *queue_info)
 {
     /* Don't block if there isn't any idle worker. */
-    for (;;) {
+   for (;;) {
         apr_uint32_t idlers = queue_info->idlers;
         if (idlers <= zero_pt) {
             return APR_EAGAIN;
